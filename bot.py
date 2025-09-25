@@ -25,14 +25,14 @@ if not os.path.exists(CSV_FILE):
 
 
 def subscribe(update: Update, context: CallbackContext):
-    """Handles the /subscribe command from affiliate managers"""
+    """Handles the /subscribe command"""
     chat = update.effective_chat
     chat_id = chat.id
     chat_name = chat.title or chat.username or "Private Chat"
 
     args = context.args
     if len(args) < 2:
-        update.message.reply_text("⚠️ Usage: /subscribe <frequency> #<affiliate_id>")
+        update.message.reply_text("⚠️ Usage: @sofiacnbot /subscribe <frequency> #<affiliate_id>")
         return
 
     frequency = args[0].lower()
@@ -99,12 +99,45 @@ def status(update: Update, context: CallbackContext):
     logger.info(f"Status check → Chat ID={chat_id} not found in CSV")
 
 
+def unsubscribe(update: Update, context: CallbackContext):
+    """Handles the /unsubscribe command"""
+    chat = update.effective_chat
+    chat_id = chat.id
+
+    if not os.path.exists(CSV_FILE):
+        update.message.reply_text("ℹ️ No subscription data available yet.")
+        return
+
+    rows = []
+    removed = False
+    with open(CSV_FILE, mode="r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if str(row["chat_id"]) == str(chat_id):
+                removed = True
+                continue
+            rows.append(row)
+
+    with open(CSV_FILE, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["chat_id", "chat_name", "frequency", "affiliate_id"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    if removed:
+        update.message.reply_text("🗑️ This chat has been unsubscribed and removed from the list.")
+        logger.info(f"Unsubscribed → Chat ID={chat_id}")
+    else:
+        update.message.reply_text("ℹ️ This chat was not subscribed.")
+        logger.info(f"Unsubscribe attempted → Chat ID={chat_id} not found")
+
+
 def start(update: Update, context: CallbackContext):
     """Handles /start command"""
     update.message.reply_text(
         "👋 Hi! I’m Sofia, your Cash Network Assistant.\n"
         "Use @sofiacnbot /subscribe <frequency> #<affiliate_id> to manage updates.\n"
-        "Use @sofiacnbot /status to check current settings."
+        "Use @sofiacnbot /status to check current settings.\n"
+        "Use @sofiacnbot /unsubscribe to remove this chat from updates."
     )
 
 
@@ -113,9 +146,10 @@ def main():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Command handlers (accept both plain and @mention versions)
+    # Command handlers (always accept both plain and @mention forms)
     dp.add_handler(CommandHandler(["subscribe", "subscribe@sofiacnbot"], subscribe, pass_args=True))
     dp.add_handler(CommandHandler(["status", "status@sofiacnbot"], status))
+    dp.add_handler(CommandHandler(["unsubscribe", "unsubscribe@sofiacnbot"], unsubscribe))
     dp.add_handler(CommandHandler("start", start))
 
     # Fallback handler for unknown text
