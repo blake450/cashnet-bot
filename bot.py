@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # make sure it's BOT_TOKEN in Render
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # must match Render env var
 CSV_FILE = "subscriptions.csv"
 
 # Ensure CSV exists with headers
@@ -74,9 +74,38 @@ def subscribe(update: Update, context: CallbackContext):
     logger.info(f"Updated subscription → Chat ID={chat_id}, Chat Name={chat_name}, Frequency={frequency}, Affiliate ID={affiliate_id}")
 
 
+def status(update: Update, context: CallbackContext):
+    """Handles the /status command"""
+    chat = update.effective_chat
+    chat_id = chat.id
+
+    if not os.path.exists(CSV_FILE):
+        update.message.reply_text("ℹ️ No subscription data available yet.")
+        return
+
+    with open(CSV_FILE, mode="r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if str(row["chat_id"]) == str(chat_id):
+                update.message.reply_text(
+                    f"📊 Current subscription settings:\n"
+                    f"Affiliate ID: {row['affiliate_id']}\n"
+                    f"Frequency: {row['frequency'].upper()}"
+                )
+                logger.info(f"Status check → Chat ID={chat_id}, Affiliate ID={row['affiliate_id']}, Frequency={row['frequency']}")
+                return
+
+    update.message.reply_text("ℹ️ This chat is not subscribed yet.")
+    logger.info(f"Status check → Chat ID={chat_id} not found in CSV")
+
+
 def start(update: Update, context: CallbackContext):
     """Handles /start command"""
-    update.message.reply_text("👋 Hi! I’m Sofia, your Cash Network Assistant.\nUse /subscribe <frequency> #<affiliate_id> to manage updates.")
+    update.message.reply_text(
+        "👋 Hi! I’m Sofia, your Cash Network Assistant.\n"
+        "Use @sofiacnbot /subscribe <frequency> #<affiliate_id> to manage updates.\n"
+        "Use @sofiacnbot /status to check current settings."
+    )
 
 
 def main():
@@ -84,8 +113,9 @@ def main():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Command handlers
+    # Command handlers (accept both plain and @mention versions)
     dp.add_handler(CommandHandler(["subscribe", "subscribe@sofiacnbot"], subscribe, pass_args=True))
+    dp.add_handler(CommandHandler(["status", "status@sofiacnbot"], status))
     dp.add_handler(CommandHandler("start", start))
 
     # Fallback handler for unknown text
