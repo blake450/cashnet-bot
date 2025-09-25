@@ -18,10 +18,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = "blake450/cashnet-bot"
 CSV_FILE = "affiliates.csv"
 
-# --- Telegram Bot Setup ---
 bot = Bot(token=BOT_TOKEN)
-
-# --- Flask App Setup ---
 app = Flask(__name__)
 
 # --- Ensure CSV Exists ---
@@ -98,7 +95,6 @@ def subscribe(update: Update, context: CallbackContext):
 
     logger.info(f"📝 Updated CSV: chat_id={chat_id}, affiliate_id={affiliate_id}, frequency={frequency}")
     update.message.reply_text(f"✅ Subscribed {chat_name} (#{affiliate_id}) to {frequency} updates.")
-
     push_to_github()
 
 def unsubscribe(update: Update, context: CallbackContext):
@@ -129,16 +125,23 @@ def start(update: Update, context: CallbackContext):
         "/unsubscribe"
     )
 
-def log_all_messages(update: Update, context: CallbackContext):
-    """Log any text message (debugging only)."""
-    logger.info(f"💬 Raw message received: {update.message.text}")
+def normalize_commands(update: Update, context: CallbackContext):
+    """Convert @sofiacnbot /subscribe → /subscribe before dispatch."""
+    text = update.message.text.strip()
+    logger.info(f"💬 Raw message received: {text}")
+    if text.lower().startswith("@sofiacnbot "):
+        # Rewrite and manually dispatch
+        new_text = text.split(" ", 1)[1]
+        update.message.text = new_text
+        logger.info(f"🔄 Normalized to: {new_text}")
+        dispatcher.process_update(update)
 
 # --- Dispatcher Setup ---
 dispatcher = Dispatcher(bot, None, workers=0)
 dispatcher.add_handler(CommandHandler("subscribe", subscribe))
 dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
 dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, log_all_messages))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, normalize_commands))
 
 # --- Flask Routes ---
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
@@ -151,10 +154,8 @@ def webhook():
 def index():
     return "🤖 Sofia bot is running with webhooks!", 200
 
-# --- Main Entry ---
 if __name__ == "__main__":
     ensure_csv_exists()
-
     render_url = os.getenv("RENDER_URL")
     if not render_url:
         raise RuntimeError("⚠️ Missing RENDER_URL environment variable in Render.")
