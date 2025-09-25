@@ -1,13 +1,39 @@
 import os
 import csv
+import subprocess
 from telegram.ext import Updater, CommandHandler
 from telegram import Update
 from telegram.ext import CallbackContext
 
 AFFILIATES_FILE = "affiliates.csv"
 MANAGERS_FILE = "managers.txt"
+REPO_URL = "https://github.com/blake450/cashnet-bot.git"  # your repo
+BRANCH = "main"
 
-# Load managers from file
+# -------------------- GitHub Sync --------------------
+def push_to_github():
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        print("⚠️ No GitHub token set. Skipping push.")
+        return
+
+    try:
+        # Configure Git identity
+        subprocess.run(["git", "config", "--global", "user.email", "bot@cashnetwork.com"])
+        subprocess.run(["git", "config", "--global", "user.name", "SofiaBot"])
+
+        # Authenticated repo URL
+        authed_repo = REPO_URL.replace("https://", f"https://{token}@")
+
+        # Commit and push changes
+        subprocess.run(["git", "add", AFFILIATES_FILE])
+        subprocess.run(["git", "commit", "-m", "Update affiliates.csv from SofiaBot"], check=False)
+        subprocess.run(["git", "push", authed_repo, BRANCH])
+        print("✅ affiliates.csv pushed to GitHub.")
+    except Exception as e:
+        print(f"❌ Failed to push to GitHub: {e}")
+
+# -------------------- Managers --------------------
 def load_managers():
     if not os.path.exists(MANAGERS_FILE):
         return []
@@ -18,7 +44,7 @@ def is_manager(username):
     managers = load_managers()
     return username.lower() in managers
 
-# Ensure affiliates.csv exists
+# -------------------- CSV Handling --------------------
 def ensure_csv():
     if not os.path.exists(AFFILIATES_FILE):
         with open(AFFILIATES_FILE, "w", newline="") as f:
@@ -54,6 +80,9 @@ def update_csv(affiliate_id, chat_id, chat_name, frequency):
         writer.writeheader()
         writer.writerows(rows)
 
+    push_to_github()  # sync after update
+
+# -------------------- Bot Commands --------------------
 def subscribe(update: Update, context: CallbackContext):
     user = update.effective_user.username
     if not is_manager(user):
@@ -93,6 +122,7 @@ def status(update: Update, context: CallbackContext):
                 return
     update.message.reply_text("ℹ️ This group is not subscribed yet.")
 
+# -------------------- Main --------------------
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
