@@ -4,7 +4,7 @@ import logging
 import subprocess
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, CallbackContext
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -43,6 +43,7 @@ def push_to_github():
             ["git", "commit", "-m", "Update affiliates.csv"],
             capture_output=True, text=True
         )
+        logger.info(f"🔍 Commit result: {result.stdout.strip()} {result.stderr.strip()}")
         if "nothing to commit" in result.stdout.lower():
             logger.info("ℹ️ No changes in affiliates.csv, skipping push.")
         else:
@@ -57,12 +58,12 @@ def subscribe(update: Update, context: CallbackContext):
     logger.info(f"📩 Received command: {message}")
 
     parts = message.split()
-    if len(parts) < 4:
-        update.message.reply_text("⚠️ Usage: @sofiacnbot /subscribe <daily|weekly|manual> #<affiliate_id>")
+    if len(parts) < 3:
+        update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<affiliate_id>")
         return
 
-    frequency = parts[2].lower()
-    affiliate_id = parts[3].lstrip("#")
+    frequency = parts[1].lower()
+    affiliate_id = parts[2].lstrip("#")
 
     if frequency not in ["daily", "weekly", "manual"]:
         update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
@@ -124,15 +125,20 @@ def start(update: Update, context: CallbackContext):
     update.message.reply_text(
         "👋 Hi! I’m Sofia, your Cash Network Assistant.\n\n"
         "Commands:\n"
-        "@sofiacnbot /subscribe <daily|weekly|manual> #<affiliate_id>\n"
-        "@sofiacnbot /unsubscribe"
+        "/subscribe <daily|weekly|manual> #<affiliate_id>\n"
+        "/unsubscribe"
     )
+
+def log_all_messages(update: Update, context: CallbackContext):
+    """Log any text message (debugging only)."""
+    logger.info(f"💬 Raw message received: {update.message.text}")
 
 # --- Dispatcher Setup ---
 dispatcher = Dispatcher(bot, None, workers=0)
 dispatcher.add_handler(CommandHandler("subscribe", subscribe))
 dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
 dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, log_all_messages))
 
 # --- Flask Routes ---
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
