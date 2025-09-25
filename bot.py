@@ -8,7 +8,7 @@ from telegram.ext import Dispatcher, CommandHandler, CallbackContext
 
 # --- Logging setup ---
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -30,26 +30,33 @@ def ensure_csv_exists():
         with open(CSV_FILE, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["chat_id", "chat_name", "affiliate_id", "frequency"])
-        logger.info("Created new affiliates.csv with headers")
+        logger.info("📄 Created new affiliates.csv with headers")
 
 # --- GitHub Push ---
 def push_to_github():
     repo_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
     try:
-        subprocess.run(["git", "config", "--global", "user.email", "sofia-bot@cashnet.com"], check=True)
-        subprocess.run(["git", "config", "--global", "user.name", "Sofia Bot"], check=True)
+        subprocess.run(["git", "config", "user.email", "sofia-bot@cashnet.com"], check=True)
+        subprocess.run(["git", "config", "user.name", "Sofia Bot"], check=True)
         subprocess.run(["git", "add", CSV_FILE], check=True)
-        subprocess.run(["git", "commit", "-m", "Update affiliates.csv"], check=True)
-        subprocess.run(["git", "push", repo_url, "main"], check=True)
-        logger.info("✅ affiliates.csv pushed to GitHub successfully.")
+        result = subprocess.run(
+            ["git", "commit", "-m", "Update affiliates.csv"],
+            capture_output=True, text=True
+        )
+        if "nothing to commit" in result.stdout.lower():
+            logger.info("ℹ️ No changes in affiliates.csv, skipping push.")
+        else:
+            subprocess.run(["git", "push", repo_url, "main"], check=True)
+            logger.info("✅ affiliates.csv pushed to GitHub successfully.")
     except subprocess.CalledProcessError as e:
         logger.error(f"⚠️ Git push failed: {e}")
 
 # --- Command Handlers ---
 def subscribe(update: Update, context: CallbackContext):
     message = update.message.text.strip()
-    parts = message.split()
+    logger.info(f"📩 Received command: {message}")
 
+    parts = message.split()
     if len(parts) < 4:
         update.message.reply_text("⚠️ Usage: @sofiacnbot /subscribe <daily|weekly|manual> #<affiliate_id>")
         return
@@ -88,12 +95,15 @@ def subscribe(update: Update, context: CallbackContext):
         writer.writeheader()
         writer.writerows(rows)
 
+    logger.info(f"📝 Updated CSV: chat_id={chat_id}, affiliate_id={affiliate_id}, frequency={frequency}")
     update.message.reply_text(f"✅ Subscribed {chat_name} (#{affiliate_id}) to {frequency} updates.")
+
     push_to_github()
 
 def unsubscribe(update: Update, context: CallbackContext):
     chat_id = str(update.message.chat_id)
     chat_name = update.message.chat.title or update.message.chat.username or "Unknown"
+    logger.info(f"📩 Received command: /unsubscribe from {chat_name} ({chat_id})")
 
     rows = []
     if os.path.exists(CSV_FILE):
@@ -106,6 +116,7 @@ def unsubscribe(update: Update, context: CallbackContext):
         writer.writeheader()
         writer.writerows(rows)
 
+    logger.info(f"🗑️ Removed subscription for chat_id={chat_id}")
     update.message.reply_text(f"✅ Unsubscribed {chat_name}.")
     push_to_github()
 
@@ -138,7 +149,6 @@ def index():
 if __name__ == "__main__":
     ensure_csv_exists()
 
-    # Get Render’s public URL (set this as env var RENDER_URL)
     render_url = os.getenv("RENDER_URL")
     if not render_url:
         raise RuntimeError("⚠️ Missing RENDER_URL environment variable in Render.")
