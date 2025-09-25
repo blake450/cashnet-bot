@@ -146,10 +146,10 @@ def main():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Command handlers (always accept both plain and @mention forms)
-    dp.add_handler(CommandHandler(["subscribe", "subscribe@sofiacnbot"], subscribe, pass_args=True))
-    dp.add_handler(CommandHandler(["status", "status@sofiacnbot"], status))
-    dp.add_handler(CommandHandler(["unsubscribe", "unsubscribe@sofiacnbot"], unsubscribe))
+    # Command handlers (no @ in definitions — Telegram auto-maps them)
+    dp.add_handler(CommandHandler("subscribe", subscribe, pass_args=True))
+    dp.add_handler(CommandHandler("status", status))
+    dp.add_handler(CommandHandler("unsubscribe", unsubscribe))
     dp.add_handler(CommandHandler("start", start))
 
     # Fallback handler for unknown text
