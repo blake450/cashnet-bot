@@ -1,144 +1,101 @@
 import os
+import logging
 import csv
-import subprocess
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, Filters, MessageHandler
 from telegram import Update
 from telegram.ext import CallbackContext
 
-AFFILIATES_FILE = "affiliates.csv"
-MANAGERS_FILE = "managers.txt"
-REPO_URL = "https://github.com/blake450/cashnet-bot.git"  # your repo
-BRANCH = "main"
+# Enable logging (logs will go to Render console automatically)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# -------------------- GitHub Sync --------------------
-def push_to_github():
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        print("⚠️ No GitHub token set. Skipping push.")
-        return
+# Load environment variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # make sure it's BOT_TOKEN in Render
+CSV_FILE = "subscriptions.csv"
 
-    try:
-        # Configure Git identity
-        subprocess.run(["git", "config", "--global", "user.email", "bot@cashnetwork.com"])
-        subprocess.run(["git", "config", "--global", "user.name", "SofiaBot"])
+# Ensure CSV exists with headers
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["chat_id", "chat_name", "frequency", "affiliate_id"])
+    logger.info("Created new subscriptions.csv with headers")
 
-        # Authenticated repo URL
-        authed_repo = REPO_URL.replace("https://", f"https://{token}@")
 
-        # Commit and push changes
-        subprocess.run(["git", "add", AFFILIATES_FILE])
-        subprocess.run(["git", "commit", "-m", "Update affiliates.csv from SofiaBot"], check=False)
-        subprocess.run(["git", "push", authed_repo, BRANCH])
-        print("✅ affiliates.csv pushed to GitHub.")
-    except Exception as e:
-        print(f"❌ Failed to push to GitHub: {e}")
-
-# -------------------- Managers --------------------
-def load_managers():
-    if not os.path.exists(MANAGERS_FILE):
-        return []
-    with open(MANAGERS_FILE, "r") as f:
-        return [line.strip().lower() for line in f.readlines()]
-
-def is_manager(username):
-    managers = load_managers()
-    return username.lower() in managers
-
-# -------------------- CSV Handling --------------------
-def ensure_csv():
-    if not os.path.exists(AFFILIATES_FILE):
-        with open(AFFILIATES_FILE, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["AffiliateID", "ChatID", "ChatName", "MessageFrequency", "LastSent"])
-
-def update_csv(affiliate_id, chat_id, chat_name, frequency):
-    ensure_csv()
-    rows = []
-    updated = False
-
-    with open(AFFILIATES_FILE, "r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if str(row["ChatID"]) == str(chat_id):
-                row["AffiliateID"] = affiliate_id
-                row["ChatName"] = chat_name
-                row["MessageFrequency"] = frequency
-                updated = True
-            rows.append(row)
-
-    if not updated:
-        rows.append({
-            "AffiliateID": affiliate_id,
-            "ChatID": chat_id,
-            "ChatName": chat_name,
-            "MessageFrequency": frequency,
-            "LastSent": ""
-        })
-
-    with open(AFFILIATES_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["AffiliateID", "ChatID", "ChatName", "MessageFrequency", "LastSent"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-    push_to_github()  # sync after update
-
-# -------------------- Bot Commands --------------------
 def subscribe(update: Update, context: CallbackContext):
-    user = update.effective_user.username
-    if not is_manager(user):
-        update.message.reply_text("❌ You are not authorized to manage subscriptions for this group.")
-        return
-
-    if len(context.args) < 2 or not context.args[1].startswith("#"):
-        update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<AffiliateID>")
-        return
-
-    frequency = context.args[0].lower()
-    affiliate_id = context.args[1].replace("#", "")
+    """Handles the /subscribe command from affiliate managers"""
     chat = update.effective_chat
+    chat_id = chat.id
+    chat_name = chat.title or chat.username or "Private Chat"
+
+    args = context.args
+    if len(args) < 2:
+        update.message.reply_text("⚠️ Usage: /subscribe <frequency> #<affiliate_id>")
+        return
+
+    frequency = args[0].lower()
+    affiliate_id = args[1].replace("#", "")
 
     if frequency not in ["daily", "weekly", "manual"]:
         update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
         return
 
-    update_csv(affiliate_id, chat.id, chat.title, frequency)
-    update.message.reply_text(
-        f"✅ Subscription updated:\nAffiliateID: {affiliate_id}\nFrequency: {frequency.upper()}"
-    )
+    # Read existing rows
+    rows = []
+    found = False
+    if os.path.exists(CSV_FILE):
+        with open(CSV_FILE, mode="r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if str(row["chat_id"]) == str(chat_id):
+                    row["frequency"] = frequency
+                    row["affiliate_id"] = affiliate_id
+                    found = True
+                rows.append(row)
 
-def status(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    ensure_csv()
-    with open(AFFILIATES_FILE, "r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if str(row["ChatID"]) == str(chat_id):
-                update.message.reply_text(
-                    f"📊 Current settings:\n"
-                    f"AffiliateID: {row['AffiliateID']}\n"
-                    f"Frequency: {row['MessageFrequency'].upper()}\n"
-                    f"LastSent: {row['LastSent']}"
-                )
-                return
-    update.message.reply_text("ℹ️ This group is not subscribed yet.")
+    # Add new row if not found
+    if not found:
+        rows.append({
+            "chat_id": chat_id,
+            "chat_name": chat_name,
+            "frequency": frequency,
+            "affiliate_id": affiliate_id
+        })
 
-# -------------------- Main --------------------
+    # Write back to CSV
+    with open(CSV_FILE, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["chat_id", "chat_name", "frequency", "affiliate_id"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    update.message.reply_text(f"✅ Subscription updated: {frequency} updates for affiliate #{affiliate_id}")
+    logger.info(f"Updated subscription → Chat ID={chat_id}, Chat Name={chat_name}, Frequency={frequency}, Affiliate ID={affiliate_id}")
+
+
+def start(update: Update, context: CallbackContext):
+    """Handles /start command"""
+    update.message.reply_text("👋 Hi! I’m Sofia, your Cash Network Assistant.\nUse /subscribe <frequency> #<affiliate_id> to manage updates.")
+
+
 def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        print("❌ ERROR: BOT_TOKEN not found in environment variables.")
-        return
-
-    ensure_csv()
-    updater = Updater(token, use_context=True)
+    """Start the bot"""
+    updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    dp.add_handler(CommandHandler("subscribe", subscribe))
-    dp.add_handler(CommandHandler("status", status))
+    # Command handlers
+    dp.add_handler(CommandHandler(["subscribe", "subscribe@sofiacnbot"], subscribe, pass_args=True))
+    dp.add_handler(CommandHandler("start", start))
 
-    print("🤖 Bot is running and ready for commands...")
+    # Fallback handler for unknown text
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, lambda u, c: None))
+
+    # Start polling
     updater.start_polling()
+    logger.info("🤖 Bot is running and ready for commands...")
     updater.idle()
+
 
 if __name__ == "__main__":
     main()
