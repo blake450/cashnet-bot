@@ -1,147 +1,118 @@
 import os
-import csv
 import logging
-from flask import Flask, request
+import csv
+from flask import Flask, request, Response, send_file
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, Dispatcher
-from github import Github
+from telegram.ext import Updater, CommandHandler, CallbackContext, Dispatcher
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# -------------------------------------------------
-# Logging setup
-# -------------------------------------------------
+# Logging for cleaner logs
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------
-# Environment variables
-# -------------------------------------------------
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "blake450/cashnet-bot")
+# File path for CSV
 CSV_FILE = "affiliates.csv"
 
-if not TELEGRAM_TOKEN or not GITHUB_TOKEN:
-    raise RuntimeError("❌ Missing TELEGRAM_BOT_TOKEN or GITHUB_TOKEN in environment variables")
+# Make sure the CSV exists
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["ChatID", "ChatName", "Frequency", "AffiliateID"])  # headers
+    logger.info("📂 Created new affiliates.csv with headers")
 
-# -------------------------------------------------
-# Flask app for webhook
-# -------------------------------------------------
+# Flask app for webhooks + CSV download
 app = Flask(__name__)
 
-updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+@app.route("/")
+def home():
+    return "🤖 SofiaCNBot is running!"
+
+@app.route("/download")
+def download():
+    """Download the affiliates.csv file directly."""
+    if os.path.exists(CSV_FILE):
+        return send_file(CSV_FILE, as_attachment=True)
+    return "CSV file not found", 404
+
+# Telegram bot setup
+TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+updater = Updater(token=TOKEN, use_context=True)
 dispatcher: Dispatcher = updater.dispatcher
 
-# -------------------------------------------------
-# GitHub Helper
-# -------------------------------------------------
-def update_github_csv(chat_id: int, chat_name: str, frequency: str, affiliate_id: str):
-    """Write/update affiliates.csv and push to GitHub."""
-    logger.info("📂 Preparing to update affiliates.csv...")
+def normalize_message(message: str) -> str:
+    """Normalize by stripping bot mentions and extra spaces."""
+    return message.replace("@sofiaCNbot", "").strip()
 
-    # Download or create CSV
-    file_exists = os.path.exists(CSV_FILE)
-    with open(CSV_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["chat_id", "chat_name", "frequency", "affiliate_id"])
-        writer.writerow([chat_id, chat_name, frequency, affiliate_id])
-
-    # Push to GitHub
-    g = Github(GITHUB_TOKEN)
-    repo = g.get_repo(GITHUB_REPO)
+def subscribe(update: Update, context: CallbackContext):
+    """Handle /subscribe commands from affiliate managers."""
+    message = normalize_message(update.message.text)
+    logger.info(f"💬 Raw message received: {update.message.text}")
+    logger.info(f"🔄 Normalized to: {message}")
 
     try:
-        contents = repo.get_contents(CSV_FILE)
-        with open(CSV_FILE, "r") as f:
-            repo.update_file(
-                contents.path,
-                f"Update {CSV_FILE}",
-                f.read(),
-                contents.sha
-            )
-        logger.info(f"✅ {CSV_FILE} updated and pushed to GitHub.")
+        parts = message.split()
+        if len(parts) != 3:
+            update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<AffiliateID>")
+            return
+
+        command, frequency, affiliate_id = parts
+        frequency = frequency.lower()
+
+        if frequency not in ["daily", "weekly", "manual"]:
+            update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
+            return
+
+        chat_id = update.message.chat_id
+        chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
+
+        # Update CSV
+        rows = []
+        updated = False
+        with open(CSV_FILE, mode="r", newline="") as file:
+            reader = csv.reader(file)
+            rows = list(reader)
+
+        for row in rows:
+            if row and row[0] == str(chat_id):
+                row[2] = frequency
+                row[3] = affiliate_id
+                updated = True
+                break
+
+        if not updated:
+            rows.append([chat_id, chat_name, frequency, affiliate_id])
+
+        with open(CSV_FILE, mode="w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerows(rows)
+
+        update.message.reply_text(f"✅ Subscription updated: {frequency} updates for {affiliate_id}")
+        logger.info(f"📝 Updated CSV: {chat_id}, {chat_name}, {frequency}, {affiliate_id}")
+
     except Exception as e:
-        logger.warning(f"{CSV_FILE} not found in repo, creating new one.")
-        with open(CSV_FILE, "r") as f:
-            repo.create_file(
-                CSV_FILE,
-                f"Create {CSV_FILE}",
-                f.read()
-            )
-        logger.info(f"✅ {CSV_FILE} created and pushed to GitHub.")
+        logger.error(f"❌ Error in subscribe: {e}")
+        update.message.reply_text("⚠️ Something went wrong while updating your subscription.")
 
-# -------------------------------------------------
-# Command Handlers
-# -------------------------------------------------
-def subscribe(update: Update, context: CallbackContext):
-    """Handle /subscribe <frequency> #<affiliate_id>"""
-    chat = update.effective_chat
-    args = context.args
-
-    if len(args) < 2 or not args[1].startswith("#"):
-        update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<affiliate_id>")
-        return
-
-    frequency = args[0].lower()
-    affiliate_id = args[1].lstrip("#")
-
-    if frequency not in ["daily", "weekly", "manual"]:
-        update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
-        return
-
-    update_github_csv(chat.id, chat.title or chat.username or "Private Chat", frequency, affiliate_id)
-    update.message.reply_text(
-        f"✅ Subscribed {chat.title or chat.username} "
-        f"to {frequency} updates for affiliate #{affiliate_id}"
-    )
-    logger.info(f"📩 Received /subscribe: chat_id={chat.id}, affiliate_id={affiliate_id}, frequency={frequency}")
-
-def unsubscribe(update: Update, context: CallbackContext):
-    """Handle /unsubscribe"""
-    chat = update.effective_chat
-    update.message.reply_text("✅ Unsubscribed this chat.")
-    logger.info(f"📩 Received /unsubscribe: chat_id={chat.id}")
-
-# -------------------------------------------------
-# Middleware for @sofiaCNbot normalization
-# -------------------------------------------------
-def normalize_commands(update: Update, context: CallbackContext):
-    """Convert @sofiaCNbot /subscribe → /subscribe and let dispatcher handle it."""
-    text = update.message.text.strip()
-    logger.info(f"💬 Raw message received: {text}")
-    if text.lower().startswith("@sofiacnbot "):
-        new_text = text.split(" ", 1)[1]
-        update.message.text = new_text
-        logger.info(f"🔄 Normalized to: {new_text}")
-    # Dispatcher will handle normally — no re-dispatch
-
-# -------------------------------------------------
-# Register Handlers
-# -------------------------------------------------
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, normalize_commands))
+# Add command handler
 dispatcher.add_handler(CommandHandler("subscribe", subscribe))
-dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
 
-# -------------------------------------------------
-# Flask route for Telegram webhook
-# -------------------------------------------------
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+# Scheduler (for future daily/weekly pushes)
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# Flask webhook endpoint
+@app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
+    """Handle incoming Telegram updates via webhook."""
     update = Update.de_json(request.get_json(force=True), updater.bot)
     dispatcher.process_update(update)
-    return "ok"
+    return Response("ok", status=200)
 
-@app.route("/", methods=["GET"])
-def index():
-    return "🤖 Sofia CN Bot is running!"
-
-# -------------------------------------------------
-# Start Flask app
-# -------------------------------------------------
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 10000))
-    logger.info("🚀 Starting Flask app 'bot'")
+    updater.bot.set_webhook(url=f"{os.environ['RENDER_EXTERNAL_URL']}/{TOKEN}")
+    logger.info(f"🌍 Webhook set to {os.environ['RENDER_EXTERNAL_URL']}/{TOKEN}")
     app.run(host="0.0.0.0", port=PORT)
