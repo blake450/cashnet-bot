@@ -38,6 +38,9 @@ def main():
             return
 
         sent_count = 0
+        fail_count = 0
+        failures = []
+
         for item in messages:
             chat_id = item.get("chat_id")
             message = item.get("message")
@@ -52,14 +55,20 @@ def main():
                 logger.info(f"📤 Sent to {chat_id}: {message[:50]}...")
                 time.sleep(0.1)  # throttle to ~10 msgs/sec max
             except Exception as e:
+                fail_count += 1
+                failures.append((chat_id, str(e)))
                 logger.error(f"❌ Failed to send to {chat_id}: {e}")
 
         # Delete file after sending
         os.remove(JSON_FILE)
-        logger.info(f"🗑️ messages.json deleted after broadcast.")
+        logger.info("🗑️ messages.json deleted after broadcast.")
 
         # Summary
-        logger.info(f"✅ Broadcast complete — {sent_count} messages sent.")
+        logger.info(f"✅ Broadcast complete — {sent_count} sent, {fail_count} failed.")
+        if failures:
+            logger.info("❌ Failure details:")
+            for chat_id, error in failures:
+                logger.info(f"   - ChatID {chat_id}: {error}")
 
     except Exception as e:
         logger.error(f"❌ Broadcast failed: {e}")
