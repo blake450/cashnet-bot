@@ -1,169 +1,147 @@
 import os
 import csv
 import logging
-import subprocess
 from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, Dispatcher
+from github import Github
 
-# --- Logging setup ---
+# -------------------------------------------------
+# Logging setup
+# -------------------------------------------------
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Env Vars ---
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = "blake450/cashnet-bot"
+# -------------------------------------------------
+# Environment variables
+# -------------------------------------------------
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "blake450/cashnet-bot")
 CSV_FILE = "affiliates.csv"
 
-bot = Bot(token=BOT_TOKEN)
+if not TELEGRAM_TOKEN or not GITHUB_TOKEN:
+    raise RuntimeError("❌ Missing TELEGRAM_BOT_TOKEN or GITHUB_TOKEN in environment variables")
+
+# -------------------------------------------------
+# Flask app for webhook
+# -------------------------------------------------
 app = Flask(__name__)
 
-# --- Ensure CSV Exists ---
-def ensure_csv_exists():
-    if not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["chat_id", "chat_name", "affiliate_id", "frequency"])
-        logger.info("📄 Created new affiliates.csv with headers")
+updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+dispatcher: Dispatcher = updater.dispatcher
 
-# --- GitHub Push ---
-def push_to_github():
-    repo_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
+# -------------------------------------------------
+# GitHub Helper
+# -------------------------------------------------
+def update_github_csv(chat_id: int, chat_name: str, frequency: str, affiliate_id: str):
+    """Write/update affiliates.csv and push to GitHub."""
+    logger.info("📂 Preparing to update affiliates.csv...")
+
+    # Download or create CSV
+    file_exists = os.path.exists(CSV_FILE)
+    with open(CSV_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["chat_id", "chat_name", "frequency", "affiliate_id"])
+        writer.writerow([chat_id, chat_name, frequency, affiliate_id])
+
+    # Push to GitHub
+    g = Github(GITHUB_TOKEN)
+    repo = g.get_repo(GITHUB_REPO)
+
     try:
-        subprocess.run(["git", "config", "user.email", "sofia-bot@cashnet.com"], check=True)
-        subprocess.run(["git", "config", "user.name", "Sofia Bot"], check=True)
-        subprocess.run(["git", "add", CSV_FILE], check=True)
-        result = subprocess.run(
-            ["git", "commit", "-m", "Update affiliates.csv"],
-            capture_output=True, text=True
-        )
-        logger.info(f"🔍 Commit result: {result.stdout.strip()} {result.stderr.strip()}")
-        if "nothing to commit" in result.stdout.lower():
-            logger.info("ℹ️ No changes in affiliates.csv, skipping push.")
-        else:
-            subprocess.run(["git", "push", repo_url, "main"], check=True)
-            logger.info("✅ affiliates.csv pushed to GitHub successfully.")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"⚠️ Git push failed: {e}")
+        contents = repo.get_contents(CSV_FILE)
+        with open(CSV_FILE, "r") as f:
+            repo.update_file(
+                contents.path,
+                f"Update {CSV_FILE}",
+                f.read(),
+                contents.sha
+            )
+        logger.info(f"✅ {CSV_FILE} updated and pushed to GitHub.")
+    except Exception as e:
+        logger.warning(f"{CSV_FILE} not found in repo, creating new one.")
+        with open(CSV_FILE, "r") as f:
+            repo.create_file(
+                CSV_FILE,
+                f"Create {CSV_FILE}",
+                f.read()
+            )
+        logger.info(f"✅ {CSV_FILE} created and pushed to GitHub.")
 
-# --- Command Handlers ---
+# -------------------------------------------------
+# Command Handlers
+# -------------------------------------------------
 def subscribe(update: Update, context: CallbackContext):
-    message = update.message.text.strip()
-    logger.info(f"📩 Received command: {message}")
+    """Handle /subscribe <frequency> #<affiliate_id>"""
+    chat = update.effective_chat
+    args = context.args
 
-    parts = message.split()
-    if len(parts) < 3:
+    if len(args) < 2 or not args[1].startswith("#"):
         update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<affiliate_id>")
         return
 
-    frequency = parts[1].lower()
-    affiliate_id = parts[2].lstrip("#")
+    frequency = args[0].lower()
+    affiliate_id = args[1].lstrip("#")
 
     if frequency not in ["daily", "weekly", "manual"]:
         update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
         return
 
-    chat_id = str(update.message.chat_id)
-    chat_name = update.message.chat.title or update.message.chat.username or "Unknown"
-
-    rows = []
-    found = False
-    if os.path.exists(CSV_FILE):
-        with open(CSV_FILE, "r", newline="") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-
-    for row in rows:
-        if row["chat_id"] == chat_id:
-            row["affiliate_id"] = affiliate_id
-            row["frequency"] = frequency
-            found = True
-            break
-
-    if not found:
-        rows.append(
-            {"chat_id": chat_id, "chat_name": chat_name, "affiliate_id": affiliate_id, "frequency": frequency}
-        )
-
-    with open(CSV_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["chat_id", "chat_name", "affiliate_id", "frequency"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-    logger.info(f"📝 Updated CSV: chat_id={chat_id}, affiliate_id={affiliate_id}, frequency={frequency}")
-    update.message.reply_text(f"✅ Subscribed {chat_name} (#{affiliate_id}) to {frequency} updates.")
-    push_to_github()
+    update_github_csv(chat.id, chat.title or chat.username or "Private Chat", frequency, affiliate_id)
+    update.message.reply_text(
+        f"✅ Subscribed {chat.title or chat.username} "
+        f"to {frequency} updates for affiliate #{affiliate_id}"
+    )
+    logger.info(f"📩 Received /subscribe: chat_id={chat.id}, affiliate_id={affiliate_id}, frequency={frequency}")
 
 def unsubscribe(update: Update, context: CallbackContext):
-    chat_id = str(update.message.chat_id)
-    chat_name = update.message.chat.title or update.message.chat.username or "Unknown"
-    logger.info(f"📩 Received command: /unsubscribe from {chat_name} ({chat_id})")
+    """Handle /unsubscribe"""
+    chat = update.effective_chat
+    update.message.reply_text("✅ Unsubscribed this chat.")
+    logger.info(f"📩 Received /unsubscribe: chat_id={chat.id}")
 
-    rows = []
-    if os.path.exists(CSV_FILE):
-        with open(CSV_FILE, "r", newline="") as f:
-            reader = csv.DictReader(f)
-            rows = [row for row in reader if row["chat_id"] != chat_id]
-
-    with open(CSV_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["chat_id", "chat_name", "affiliate_id", "frequency"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-    logger.info(f"🗑️ Removed subscription for chat_id={chat_id}")
-    update.message.reply_text(f"✅ Unsubscribed {chat_name}.")
-    push_to_github()
-
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "👋 Hi! I’m Sofia, your Cash Network Assistant.\n\n"
-        "Commands:\n"
-        "/subscribe <daily|weekly|manual> #<affiliate_id>\n"
-        "/unsubscribe"
-    )
-
+# -------------------------------------------------
+# Middleware for @sofiaCNbot normalization
+# -------------------------------------------------
 def normalize_commands(update: Update, context: CallbackContext):
-    """Convert @sofiacnbot /subscribe → /subscribe before dispatch."""
+    """Convert @sofiaCNbot /subscribe → /subscribe and let dispatcher handle it."""
     text = update.message.text.strip()
     logger.info(f"💬 Raw message received: {text}")
     if text.lower().startswith("@sofiacnbot "):
-        # Rewrite and manually dispatch
         new_text = text.split(" ", 1)[1]
         update.message.text = new_text
         logger.info(f"🔄 Normalized to: {new_text}")
-        dispatcher.process_update(update)
+    # Dispatcher will handle normally — no re-dispatch
 
-# --- Dispatcher Setup ---
-dispatcher = Dispatcher(bot, None, workers=0)
+# -------------------------------------------------
+# Register Handlers
+# -------------------------------------------------
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, normalize_commands))
 dispatcher.add_handler(CommandHandler("subscribe", subscribe))
 dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, normalize_commands))
 
-# --- Flask Routes ---
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+# -------------------------------------------------
+# Flask route for Telegram webhook
+# -------------------------------------------------
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
+    update = Update.de_json(request.get_json(force=True), updater.bot)
     dispatcher.process_update(update)
-    return "ok", 200
+    return "ok"
 
 @app.route("/", methods=["GET"])
 def index():
-    return "🤖 Sofia bot is running with webhooks!", 200
+    return "🤖 Sofia CN Bot is running!"
 
+# -------------------------------------------------
+# Start Flask app
+# -------------------------------------------------
 if __name__ == "__main__":
-    ensure_csv_exists()
-    render_url = os.getenv("RENDER_URL")
-    if not render_url:
-        raise RuntimeError("⚠️ Missing RENDER_URL environment variable in Render.")
-
-    webhook_url = f"{render_url}/{BOT_TOKEN}"
-    bot.delete_webhook()
-    bot.set_webhook(webhook_url)
-
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🌐 Starting Flask on port {port}, webhook set to {webhook_url}")
-    app.run(host="0.0.0.0", port=port)
+    PORT = int(os.environ.get("PORT", 10000))
+    logger.info("🚀 Starting Flask app 'bot'")
+    app.run(host="0.0.0.0", port=PORT)
