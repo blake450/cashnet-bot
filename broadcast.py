@@ -59,9 +59,14 @@ def main():
                 failures.append((chat_id, str(e)))
                 logger.error(f"❌ Failed to send to {chat_id}: {e}")
 
-        # Delete file after sending
+        # Delete old file
         os.remove(JSON_FILE)
         logger.info("🗑️ messages.json deleted after broadcast.")
+
+        # Create new blank file for next time
+        with open(JSON_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f)
+        logger.info("📂 New blank messages.json created.")
 
         # Summary
         logger.info(f"✅ Broadcast complete — {sent_count} sent, {fail_count} failed.")
