@@ -19,11 +19,12 @@ logger = logging.getLogger(__name__)
 # CSV setup
 # -------------------------------------------------
 CSV_FILE = "affiliates.csv"
+HEADERS = ["ChatID", "ChatName", "Frequency", "AffiliateID"]
 
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["ChatID", "ChatName", "Frequency", "AffiliateID"])
+        writer = csv.DictWriter(file, fieldnames=HEADERS)
+        writer.writeheader()
     logger.info("📂 Created new affiliates.csv with headers")
 
 # -------------------------------------------------
@@ -80,24 +81,32 @@ def handle_message(update: Update, context: CallbackContext):
 
             # Load CSV
             rows = []
-            updated = False
-            with open(CSV_FILE, mode="r", newline="") as file:
-                reader = csv.reader(file)
-                rows = list(reader)
+            if os.path.exists(CSV_FILE):
+                with open(CSV_FILE, mode="r", newline="") as file:
+                    reader = csv.DictReader(file)
+                    rows = list(reader)
 
             # Update or add row
+            found = False
             for row in rows:
-                if row and row[0] == chat_id:
-                    row[2] = frequency
-                    row[3] = affiliate_id
-                    updated = True
+                if row["ChatID"] == chat_id:
+                    row["Frequency"] = frequency
+                    row["AffiliateID"] = affiliate_id
+                    found = True
                     break
 
-            if not updated:
-                rows.append([chat_id, chat_name, frequency, affiliate_id])
+            if not found:
+                rows.append({
+                    "ChatID": chat_id,
+                    "ChatName": chat_name,
+                    "Frequency": frequency,
+                    "AffiliateID": affiliate_id
+                })
 
+            # Write back with headers
             with open(CSV_FILE, mode="w", newline="") as file:
-                writer = csv.writer(file)
+                writer = csv.DictWriter(file, fieldnames=HEADERS)
+                writer.writeheader()
                 writer.writerows(rows)
 
             logger.info(f"📝 affiliates.csv updated → {chat_id}, {chat_name}, {frequency}, {affiliate_id}")
@@ -115,12 +124,14 @@ def handle_message(update: Update, context: CallbackContext):
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
 
             rows = []
-            with open(CSV_FILE, mode="r", newline="") as file:
-                reader = csv.reader(file)
-                rows = [row for row in reader if row and row[0] != chat_id]
+            if os.path.exists(CSV_FILE):
+                with open(CSV_FILE, mode="r", newline="") as file:
+                    reader = csv.DictReader(file)
+                    rows = [row for row in reader if row["ChatID"] != chat_id]
 
             with open(CSV_FILE, mode="w", newline="") as file:
-                writer = csv.writer(file)
+                writer = csv.DictWriter(file, fieldnames=HEADERS)
+                writer.writeheader()
                 writer.writerows(rows)
 
             logger.info(f"🗑️ Removed subscription → {chat_id}, {chat_name}")
