@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import logging
 from telegram import Bot
 
@@ -36,6 +37,7 @@ def main():
             logger.error("❌ Invalid messages.json format — must be a list of {chat_id, message}.")
             return
 
+        sent_count = 0
         for item in messages:
             chat_id = item.get("chat_id")
             message = item.get("message")
@@ -44,12 +46,20 @@ def main():
                 logger.warning(f"⚠️ Skipping invalid entry: {item}")
                 continue
 
-            bot.send_message(chat_id=chat_id, text=message)
-            logger.info(f"📤 Sent to {chat_id}: {message[:50]}...")
+            try:
+                bot.send_message(chat_id=chat_id, text=message)
+                sent_count += 1
+                logger.info(f"📤 Sent to {chat_id}: {message[:50]}...")
+                time.sleep(0.1)  # throttle to ~10 msgs/sec max
+            except Exception as e:
+                logger.error(f"❌ Failed to send to {chat_id}: {e}")
 
         # Delete file after sending
         os.remove(JSON_FILE)
-        logger.info("🗑️ messages.json deleted after broadcast.")
+        logger.info(f"🗑️ messages.json deleted after broadcast.")
+
+        # Summary
+        logger.info(f"✅ Broadcast complete — {sent_count} messages sent.")
 
     except Exception as e:
         logger.error(f"❌ Broadcast failed: {e}")
