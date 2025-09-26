@@ -3,27 +3,32 @@ import logging
 import csv
 from flask import Flask, request, Response, send_file
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackContext, Dispatcher
+from telegram.ext import Updater, CallbackContext, Dispatcher, MessageHandler, Filters
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Logging for cleaner logs
+# -------------------------------------------------
+# Logging setup
+# -------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# File path for CSV
+# -------------------------------------------------
+# CSV setup
+# -------------------------------------------------
 CSV_FILE = "affiliates.csv"
 
-# Make sure the CSV exists
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode="w", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["ChatID", "ChatName", "Frequency", "AffiliateID"])  # headers
+        writer.writerow(["ChatID", "ChatName", "Frequency", "AffiliateID"])
     logger.info("📂 Created new affiliates.csv with headers")
 
-# Flask app for webhooks + CSV download
+# -------------------------------------------------
+# Flask app
+# -------------------------------------------------
 app = Flask(__name__)
 
 @app.route("/")
@@ -32,81 +37,113 @@ def home():
 
 @app.route("/download")
 def download():
-    """Download the affiliates.csv file directly."""
     if os.path.exists(CSV_FILE):
         return send_file(CSV_FILE, as_attachment=True)
     return "CSV file not found", 404
 
-# Telegram bot setup
+# -------------------------------------------------
+# Telegram setup
+# -------------------------------------------------
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 updater = Updater(token=TOKEN, use_context=True)
 dispatcher: Dispatcher = updater.dispatcher
 
 def normalize_message(message: str) -> str:
-    """Normalize by stripping bot mentions and extra spaces."""
+    """Normalize by removing @sofiaCNbot mention."""
     return message.replace("@sofiaCNbot", "").strip()
 
-def subscribe(update: Update, context: CallbackContext):
-    """Handle /subscribe commands from affiliate managers."""
-    message = normalize_message(update.message.text)
-    logger.info(f"💬 Raw message received: {update.message.text}")
-    logger.info(f"🔄 Normalized to: {message}")
+def handle_message(update: Update, context: CallbackContext):
+    """Catch all messages and process commands manually."""
+    raw_text = update.message.text or ""
+    logger.info(f"💬 Raw message received: {raw_text}")
 
-    try:
-        parts = message.split()
-        if len(parts) != 3:
-            update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<AffiliateID>")
-            return
+    text = normalize_message(raw_text)
+    logger.info(f"🔄 Normalized to: {text}")
 
-        command, frequency, affiliate_id = parts
-        frequency = frequency.lower()
+    if text.startswith("/subscribe"):
+        try:
+            parts = text.split()
+            if len(parts) != 3:
+                update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<AffiliateID>")
+                return
 
-        if frequency not in ["daily", "weekly", "manual"]:
-            update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
-            return
+            _, frequency, affiliate_id = parts
+            frequency = frequency.lower()
 
-        chat_id = update.message.chat_id
-        chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
+            if frequency not in ["daily", "weekly", "manual"]:
+                update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
+                return
 
-        # Update CSV
-        rows = []
-        updated = False
-        with open(CSV_FILE, mode="r", newline="") as file:
-            reader = csv.reader(file)
-            rows = list(reader)
+            affiliate_id = affiliate_id.lstrip("#")
+            chat_id = str(update.message.chat_id)
+            chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
 
-        for row in rows:
-            if row and row[0] == str(chat_id):
-                row[2] = frequency
-                row[3] = affiliate_id
-                updated = True
-                break
+            # Load CSV
+            rows = []
+            updated = False
+            with open(CSV_FILE, mode="r", newline="") as file:
+                reader = csv.reader(file)
+                rows = list(reader)
 
-        if not updated:
-            rows.append([chat_id, chat_name, frequency, affiliate_id])
+            # Update or add row
+            for row in rows:
+                if row and row[0] == chat_id:
+                    row[2] = frequency
+                    row[3] = affiliate_id
+                    updated = True
+                    break
 
-        with open(CSV_FILE, mode="w", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerows(rows)
+            if not updated:
+                rows.append([chat_id, chat_name, frequency, affiliate_id])
 
-        update.message.reply_text(f"✅ Subscription updated: {frequency} updates for {affiliate_id}")
-        logger.info(f"📝 Updated CSV: {chat_id}, {chat_name}, {frequency}, {affiliate_id}")
+            with open(CSV_FILE, mode="w", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerows(rows)
 
-    except Exception as e:
-        logger.error(f"❌ Error in subscribe: {e}")
-        update.message.reply_text("⚠️ Something went wrong while updating your subscription.")
+            logger.info(f"📝 affiliates.csv updated → {chat_id}, {chat_name}, {frequency}, {affiliate_id}")
+            update.message.reply_text(
+                f"✅ CSV updated: {chat_name} | ID #{affiliate_id} | {frequency}"
+            )
 
-# Add command handler
-dispatcher.add_handler(CommandHandler("subscribe", subscribe))
+        except Exception as e:
+            logger.error(f"❌ Error in subscribe: {e}")
+            update.message.reply_text("⚠️ Something went wrong while updating your subscription.")
 
-# Scheduler (for future daily/weekly pushes)
+    elif text.startswith("/unsubscribe"):
+        try:
+            chat_id = str(update.message.chat_id)
+            chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
+
+            rows = []
+            with open(CSV_FILE, mode="r", newline="") as file:
+                reader = csv.reader(file)
+                rows = [row for row in reader if row and row[0] != chat_id]
+
+            with open(CSV_FILE, mode="w", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerows(rows)
+
+            logger.info(f"🗑️ Removed subscription → {chat_id}, {chat_name}")
+            update.message.reply_text(f"✅ Unsubscribed {chat_name}.")
+
+        except Exception as e:
+            logger.error(f"❌ Error in unsubscribe: {e}")
+            update.message.reply_text("⚠️ Something went wrong while unsubscribing.")
+
+# Catch-all handler
+dispatcher.add_handler(MessageHandler(Filters.text, handle_message))
+
+# -------------------------------------------------
+# Scheduler (placeholder for daily/weekly jobs later)
+# -------------------------------------------------
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# Flask webhook endpoint
+# -------------------------------------------------
+# Webhook endpoint
+# -------------------------------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    """Handle incoming Telegram updates via webhook."""
     update = Update.de_json(request.get_json(force=True), updater.bot)
     dispatcher.process_update(update)
     return Response("ok", status=200)
