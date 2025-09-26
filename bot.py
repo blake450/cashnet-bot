@@ -6,18 +6,13 @@ from telegram import Update
 from telegram.ext import Updater, CallbackContext, Dispatcher, MessageHandler, Filters
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# -------------------------------------------------
 # Logging setup
-# -------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------
-# CSV setup
-# -------------------------------------------------
 CSV_FILE = "affiliates.csv"
 HEADERS = ["ChatID", "Frequency", "AffiliateID"]
 
@@ -27,9 +22,6 @@ if not os.path.exists(CSV_FILE):
         writer.writeheader()
     logger.info("📂 Created new affiliates.csv with headers")
 
-# -------------------------------------------------
-# Flask app
-# -------------------------------------------------
 app = Flask(__name__)
 
 @app.route("/")
@@ -42,22 +34,16 @@ def download():
         return send_file(CSV_FILE, as_attachment=True)
     return "CSV file not found", 404
 
-# -------------------------------------------------
-# Telegram setup
-# -------------------------------------------------
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 updater = Updater(token=TOKEN, use_context=True)
 dispatcher: Dispatcher = updater.dispatcher
 
 def normalize_message(message: str) -> str:
-    """Normalize by removing @sofiaCNbot mention."""
     return message.replace("@sofiaCNbot", "").strip()
 
 def handle_message(update: Update, context: CallbackContext):
-    """Catch all messages and process commands manually."""
     raw_text = update.message.text or ""
     logger.info(f"💬 Raw message received: {raw_text}")
-
     text = normalize_message(raw_text)
     logger.info(f"🔄 Normalized to: {text}")
 
@@ -79,42 +65,35 @@ def handle_message(update: Update, context: CallbackContext):
             chat_id = str(update.message.chat_id)
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
 
-            # Load CSV
             rows = []
             if os.path.exists(CSV_FILE):
                 with open(CSV_FILE, mode="r", newline="") as file:
                     reader = csv.DictReader(file)
                     rows = list(reader)
 
-            # Update or add row
-            found = False
-            for row in rows:
-                if row["ChatID"] == chat_id:
-                    row["Frequency"] = frequency
-                    row["AffiliateID"] = affiliate_id
-                    found = True
-                    break
+            # ✅ Check for duplicate (ChatID + AffiliateID combo)
+            duplicate = any(
+                row["ChatID"] == chat_id and row["AffiliateID"] == affiliate_id
+                for row in rows
+            )
 
-            if not found:
+            if duplicate:
+                update.message.reply_text(f"⚠️ ID #{affiliate_id} is already subscribed in this chat.")
+            else:
+                # Add a new row for this ChatID + AffiliateID
                 rows.append({
                     "ChatID": chat_id,
                     "Frequency": frequency,
                     "AffiliateID": affiliate_id
                 })
 
-            # Write back with headers
-            with open(CSV_FILE, mode="w", newline="") as file:
-                writer = csv.DictWriter(file, fieldnames=HEADERS)
-                writer.writeheader()
-                writer.writerows(rows)
+                with open(CSV_FILE, mode="w", newline="") as file:
+                    writer = csv.DictWriter(file, fieldnames=HEADERS)
+                    writer.writeheader()
+                    writer.writerows(rows)
 
-            # Log shows chat name, but not stored in CSV
-            logger.info(
-                f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'"
-            )
-            update.message.reply_text(
-                f"✅ CSV updated: ID #{affiliate_id} | {frequency}"
-            )
+                logger.info(f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'")
+                update.message.reply_text(f"✅ Subscribed: ID #{affiliate_id} | {frequency}")
 
         except Exception as e:
             logger.error(f"❌ Error in subscribe: {e}")
@@ -143,18 +122,11 @@ def handle_message(update: Update, context: CallbackContext):
             logger.error(f"❌ Error in unsubscribe: {e}")
             update.message.reply_text("⚠️ Something went wrong while unsubscribing.")
 
-# Catch-all handler
 dispatcher.add_handler(MessageHandler(Filters.text, handle_message))
 
-# -------------------------------------------------
-# Scheduler (placeholder for daily/weekly jobs later)
-# -------------------------------------------------
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# -------------------------------------------------
-# Webhook endpoint
-# -------------------------------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), updater.bot)
