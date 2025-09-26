@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # CSV setup
 # -------------------------------------------------
 CSV_FILE = "affiliates.csv"
-HEADERS = ["ChatID", "ChatName", "Frequency", "AffiliateID"]
+HEADERS = ["ChatID", "Frequency", "AffiliateID"]
 
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode="w", newline="") as file:
@@ -98,7 +98,6 @@ def handle_message(update: Update, context: CallbackContext):
             if not found:
                 rows.append({
                     "ChatID": chat_id,
-                    "ChatName": chat_name,
                     "Frequency": frequency,
                     "AffiliateID": affiliate_id
                 })
@@ -109,9 +108,12 @@ def handle_message(update: Update, context: CallbackContext):
                 writer.writeheader()
                 writer.writerows(rows)
 
-            logger.info(f"📝 affiliates.csv updated → {chat_id}, {chat_name}, {frequency}, {affiliate_id}")
+            # Log shows chat name, but not stored in CSV
+            logger.info(
+                f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'"
+            )
             update.message.reply_text(
-                f"✅ CSV updated: {chat_name} | ID #{affiliate_id} | {frequency}"
+                f"✅ CSV updated: ID #{affiliate_id} | {frequency}"
             )
 
         except Exception as e:
@@ -134,8 +136,8 @@ def handle_message(update: Update, context: CallbackContext):
                 writer.writeheader()
                 writer.writerows(rows)
 
-            logger.info(f"🗑️ Removed subscription → {chat_id}, {chat_name}")
-            update.message.reply_text(f"✅ Unsubscribed {chat_name}.")
+            logger.info(f"🗑️ Removed subscription → {chat_id} from chat '{chat_name}'")
+            update.message.reply_text(f"✅ Unsubscribed this chat.")
 
         except Exception as e:
             logger.error(f"❌ Error in unsubscribe: {e}")
