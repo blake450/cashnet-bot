@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CSV_FILE = "affiliates.csv"
+CSV_FILE = "/data/affiliates.csv"
 HEADERS = ["ChatID", "Frequency", "AffiliateID"]
 
 if not os.path.exists(CSV_FILE):
