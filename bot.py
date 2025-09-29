@@ -38,12 +38,23 @@ TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 updater = Updater(token=TOKEN, use_context=True)
 dispatcher: Dispatcher = updater.dispatcher
 
+# ✅ Hard-coded whitelist of Telegram usernames
+APPROVED_USERNAMES = {"blakebarrett", "sarahbradford", "iamamil05", "gbrookshire"}
+
 def normalize_message(message: str) -> str:
     return message.replace("@sofiaCNbot", "").strip()
 
 def handle_message(update: Update, context: CallbackContext):
     raw_text = update.message.text or ""
-    logger.info(f"💬 Raw message received: {raw_text}")
+    username = str(update.message.from_user.username or "")
+    user_id = str(update.message.from_user.id)
+
+    # 🚫 Ignore non-approved users
+    if username.lower() not in APPROVED_USERNAMES:
+        logger.warning(f"🚫 Unauthorized attempt by user {username} (ID {user_id}) with message: {raw_text}")
+        return  # Do not reply in chat
+
+    logger.info(f"💬 Authorized command from {username}: {raw_text}")
     text = normalize_message(raw_text)
     logger.info(f"🔄 Normalized to: {text}")
 
