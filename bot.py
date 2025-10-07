@@ -6,13 +6,18 @@ from telegram import Update
 from telegram.ext import Updater, CallbackContext, Dispatcher, MessageHandler, Filters
 from apscheduler.schedulers.background import BackgroundScheduler
 
+# ----------------------------------------
 # Logging setup
+# ----------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# ----------------------------------------
+# Constants and file setup
+# ----------------------------------------
 CSV_FILE = "/data/affiliates.csv"
 HEADERS = ["ChatID", "Frequency", "AffiliateID"]
 
@@ -23,6 +28,9 @@ if not os.path.exists(CSV_FILE):
         writer.writeheader()
     logger.info("📂 Created new affiliates.csv with headers")
 
+# ----------------------------------------
+# Flask app setup
+# ----------------------------------------
 app = Flask(__name__)
 
 @app.route("/")
@@ -35,17 +43,22 @@ def download():
         return send_file(CSV_FILE, as_attachment=True)
     return "CSV file not found", 404
 
-# --- Telegram setup ---
+# ----------------------------------------
+# Telegram setup
+# ----------------------------------------
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 updater = Updater(token=TOKEN, use_context=True)
 dispatcher: Dispatcher = updater.dispatcher
 
-# ✅ Approved Telegram usernames for security
+# ✅ Whitelisted Telegram usernames
 APPROVED_USERNAMES = {"blakebarrett", "sarahbradford", "iamamil05", "gbrookshire"}
 
 def normalize_message(message: str) -> str:
     return message.replace("@sofiaCNbot", "").strip()
 
+# ----------------------------------------
+# Message handler
+# ----------------------------------------
 def handle_message(update: Update, context: CallbackContext):
     raw_text = update.message.text or ""
     username = str(update.message.from_user.username or "")
@@ -60,7 +73,9 @@ def handle_message(update: Update, context: CallbackContext):
     text = normalize_message(raw_text)
     logger.info(f"🔄 Normalized to: {text}")
 
-    # --- Subscription Command ---
+    # ----------------------------------------
+    # /subscribe command
+    # ----------------------------------------
     if text.startswith("/subscribe"):
         try:
             parts = text.split()
@@ -72,9 +87,10 @@ def handle_message(update: Update, context: CallbackContext):
             chat_id = str(update.message.chat_id)
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
 
-            # ✅ Identify Sofia internal subscriptions
-            is_sofia_subscription = frequency.startswith("Sofia_")
+            # ✅ Detect Sofia internal subscriptions (case-insensitive)
+            is_sofia_subscription = frequency.lower().startswith("sofia_")
 
+            # ✅ Normalize frequency for standard affiliate subscriptions
             if not is_sofia_subscription:
                 frequency = frequency.lower()
                 if frequency not in ["daily", "weekly", "manual"]:
@@ -83,19 +99,20 @@ def handle_message(update: Update, context: CallbackContext):
                     )
                     return
 
-            # Clean AffiliateID
+            # ✅ Clean AffiliateID
             affiliate_id = affiliate_id.lstrip("#")
             if not affiliate_id.isdigit():
                 update.message.reply_text("⚠️ AffiliateID must be numeric (use 0 for internal Sofia updates).")
                 return
 
+            # ✅ Load existing subscriptions
             rows = []
             if os.path.exists(CSV_FILE):
                 with open(CSV_FILE, mode="r", newline="") as file:
                     reader = csv.DictReader(file)
                     rows = list(reader)
 
-            # ✅ Prevent duplicate subscriptions (same ChatID + Frequency combo)
+            # ✅ Prevent duplicate subscriptions (same ChatID + Frequency)
             duplicate = any(
                 row["ChatID"] == chat_id and row["Frequency"].lower() == frequency.lower()
                 for row in rows
@@ -104,7 +121,6 @@ def handle_message(update: Update, context: CallbackContext):
             if duplicate:
                 update.message.reply_text(f"⚠️ This chat is already subscribed for {frequency}.")
             else:
-                # Add or update row
                 rows.append({
                     "ChatID": chat_id,
                     "Frequency": frequency,
@@ -129,7 +145,9 @@ def handle_message(update: Update, context: CallbackContext):
             logger.error(f"❌ Error in subscribe: {e}")
             update.message.reply_text("⚠️ Something went wrong while updating your subscription.")
 
-    # --- Unsubscribe Command ---
+    # ----------------------------------------
+    # /unsubscribe command
+    # ----------------------------------------
     elif text.startswith("/unsubscribe"):
         try:
             chat_id = str(update.message.chat_id)
@@ -139,7 +157,7 @@ def handle_message(update: Update, context: CallbackContext):
             if os.path.exists(CSV_FILE):
                 with open(CSV_FILE, mode="r", newline="") as file:
                     reader = csv.DictReader(file)
-                    # Remove any rows that match this ChatID
+                    # Remove all rows for this chat ID
                     rows = [row for row in reader if row["ChatID"] != chat_id]
 
             with open(CSV_FILE, mode="w", newline="") as file:
@@ -154,8 +172,14 @@ def handle_message(update: Update, context: CallbackContext):
             logger.error(f"❌ Error in unsubscribe: {e}")
             update.message.reply_text("⚠️ Something went wrong while unsubscribing.")
 
+# ----------------------------------------
+# Register message handler
+# ----------------------------------------
 dispatcher.add_handler(MessageHandler(Filters.text, handle_message))
 
+# ----------------------------------------
+# Scheduler & Webhook setup
+# ----------------------------------------
 scheduler = BackgroundScheduler()
 scheduler.start()
 
