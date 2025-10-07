@@ -87,17 +87,16 @@ def handle_message(update: Update, context: CallbackContext):
             chat_id = str(update.message.chat_id)
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
 
-            # ✅ Detect Sofia internal subscriptions (case-insensitive)
-            is_sofia_subscription = frequency.lower().startswith("sofia_")
+            # ✅ Case-insensitive Sofia detection
+            freq_lower = frequency.lower()
+            is_sofia_subscription = freq_lower.startswith("sofia_")
 
-            # ✅ Normalize frequency for standard affiliate subscriptions
+            # ✅ Only validate standard affiliate frequencies
             if not is_sofia_subscription:
-                frequency = frequency.lower()
-                if frequency not in ["daily", "weekly", "manual"]:
-                    update.message.reply_text(
-                        "⚠️ Frequency must be one of: daily, weekly, manual, or start with Sofia_"
-                    )
+                if freq_lower not in ["daily", "weekly", "manual"]:
+                    update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, or manual")
                     return
+                frequency = freq_lower  # normalize for storage
 
             # ✅ Clean AffiliateID
             affiliate_id = affiliate_id.lstrip("#")
@@ -114,7 +113,7 @@ def handle_message(update: Update, context: CallbackContext):
 
             # ✅ Prevent duplicate subscriptions (same ChatID + Frequency)
             duplicate = any(
-                row["ChatID"] == chat_id and row["Frequency"].lower() == frequency.lower()
+                row["ChatID"] == chat_id and row["Frequency"].lower() == freq_lower
                 for row in rows
             )
 
