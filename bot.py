@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 CSV_FILE = "/data/affiliates.csv"
 HEADERS = ["ChatID", "Frequency", "AffiliateID"]
 
+# ✅ Ensure affiliates.csv exists
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode="w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=HEADERS)
@@ -34,11 +35,12 @@ def download():
         return send_file(CSV_FILE, as_attachment=True)
     return "CSV file not found", 404
 
+# --- Telegram setup ---
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 updater = Updater(token=TOKEN, use_context=True)
 dispatcher: Dispatcher = updater.dispatcher
 
-# ✅ Hard-coded whitelist of Telegram usernames
+# ✅ Approved Telegram usernames for security
 APPROVED_USERNAMES = {"blakebarrett", "sarahbradford", "iamamil05", "gbrookshire"}
 
 def normalize_message(message: str) -> str:
@@ -51,30 +53,41 @@ def handle_message(update: Update, context: CallbackContext):
 
     # 🚫 Ignore non-approved users
     if username.lower() not in APPROVED_USERNAMES:
-        logger.warning(f"🚫 Unauthorized attempt by user {username} (ID {user_id}) with message: {raw_text}")
-        return  # Do not reply in chat
+        logger.warning(f"🚫 Unauthorized attempt by {username} (ID {user_id}) with message: {raw_text}")
+        return
 
     logger.info(f"💬 Authorized command from {username}: {raw_text}")
     text = normalize_message(raw_text)
     logger.info(f"🔄 Normalized to: {text}")
 
+    # --- Subscription Command ---
     if text.startswith("/subscribe"):
         try:
             parts = text.split()
             if len(parts) != 3:
-                update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual> #<AffiliateID>")
+                update.message.reply_text("⚠️ Usage: /subscribe <daily|weekly|manual|Sofia_*Type*> <AffiliateID>")
                 return
 
             _, frequency, affiliate_id = parts
-            frequency = frequency.lower()
-
-            if frequency not in ["daily", "weekly", "manual"]:
-                update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, manual")
-                return
-
-            affiliate_id = affiliate_id.lstrip("#")
             chat_id = str(update.message.chat_id)
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
+
+            # ✅ Identify Sofia internal subscriptions
+            is_sofia_subscription = frequency.startswith("Sofia_")
+
+            if not is_sofia_subscription:
+                frequency = frequency.lower()
+                if frequency not in ["daily", "weekly", "manual"]:
+                    update.message.reply_text(
+                        "⚠️ Frequency must be one of: daily, weekly, manual, or start with Sofia_"
+                    )
+                    return
+
+            # Clean AffiliateID
+            affiliate_id = affiliate_id.lstrip("#")
+            if not affiliate_id.isdigit():
+                update.message.reply_text("⚠️ AffiliateID must be numeric (use 0 for internal Sofia updates).")
+                return
 
             rows = []
             if os.path.exists(CSV_FILE):
@@ -82,16 +95,16 @@ def handle_message(update: Update, context: CallbackContext):
                     reader = csv.DictReader(file)
                     rows = list(reader)
 
-            # ✅ Check for duplicate (ChatID + AffiliateID combo)
+            # ✅ Prevent duplicate subscriptions (same ChatID + Frequency combo)
             duplicate = any(
-                row["ChatID"] == chat_id and row["AffiliateID"] == affiliate_id
+                row["ChatID"] == chat_id and row["Frequency"].lower() == frequency.lower()
                 for row in rows
             )
 
             if duplicate:
-                update.message.reply_text(f"⚠️ ID #{affiliate_id} is already subscribed in this chat.")
+                update.message.reply_text(f"⚠️ This chat is already subscribed for {frequency}.")
             else:
-                # Add a new row for this ChatID + AffiliateID
+                # Add or update row
                 rows.append({
                     "ChatID": chat_id,
                     "Frequency": frequency,
@@ -103,13 +116,20 @@ def handle_message(update: Update, context: CallbackContext):
                     writer.writeheader()
                     writer.writerows(rows)
 
-                logger.info(f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'")
-                update.message.reply_text(f"✅ Subscribed: ID #{affiliate_id} | {frequency}")
+                if is_sofia_subscription:
+                    update.message.reply_text(f"✅ Subscribed this chat for {frequency} updates.")
+                else:
+                    update.message.reply_text(f"✅ Subscribed: ID #{affiliate_id} | {frequency}")
+
+                logger.info(
+                    f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'"
+                )
 
         except Exception as e:
             logger.error(f"❌ Error in subscribe: {e}")
             update.message.reply_text("⚠️ Something went wrong while updating your subscription.")
 
+    # --- Unsubscribe Command ---
     elif text.startswith("/unsubscribe"):
         try:
             chat_id = str(update.message.chat_id)
@@ -119,6 +139,7 @@ def handle_message(update: Update, context: CallbackContext):
             if os.path.exists(CSV_FILE):
                 with open(CSV_FILE, mode="r", newline="") as file:
                     reader = csv.DictReader(file)
+                    # Remove any rows that match this ChatID
                     rows = [row for row in reader if row["ChatID"] != chat_id]
 
             with open(CSV_FILE, mode="w", newline="") as file:
@@ -126,8 +147,8 @@ def handle_message(update: Update, context: CallbackContext):
                 writer.writeheader()
                 writer.writerows(rows)
 
-            logger.info(f"🗑️ Removed subscription → {chat_id} from chat '{chat_name}'")
-            update.message.reply_text(f"✅ Unsubscribed this chat.")
+            logger.info(f"🗑️ Unsubscribed chat {chat_id} ('{chat_name}')")
+            update.message.reply_text("✅ This chat has been unsubscribed.")
 
         except Exception as e:
             logger.error(f"❌ Error in unsubscribe: {e}")
