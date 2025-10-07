@@ -54,7 +54,14 @@ dispatcher: Dispatcher = updater.dispatcher
 APPROVED_USERNAMES = {"blakebarrett", "sarahbradford", "iamamil05", "gbrookshire"}
 
 def normalize_message(message: str) -> str:
-    return message.replace("@sofiaCNbot", "").strip()
+    """Normalize messages to remove bot mentions and case issues."""
+    if not message:
+        return ""
+    message = message.replace("@sofiaCNbot", "")
+    message = message.replace("@SofiaCNbot", "")
+    message = message.replace("@SOFIACNBOT", "")
+    message = message.replace("\u200b", "")  # remove invisible Telegram chars
+    return message.strip()
 
 # ----------------------------------------
 # Message handler
@@ -76,7 +83,7 @@ def handle_message(update: Update, context: CallbackContext):
     # ----------------------------------------
     # /subscribe command
     # ----------------------------------------
-    if text.startswith("/subscribe"):
+    if text.lower().startswith("/subscribe"):
         try:
             parts = text.split()
             if len(parts) != 3:
@@ -87,16 +94,17 @@ def handle_message(update: Update, context: CallbackContext):
             chat_id = str(update.message.chat_id)
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
 
-            # ✅ Case-insensitive Sofia detection
+            # ✅ Always lowercase frequency for logic
             freq_lower = frequency.lower()
+
+            # ✅ Detect Sofia internal subscriptions (case-insensitive)
             is_sofia_subscription = freq_lower.startswith("sofia_")
 
-            # ✅ Only validate standard affiliate frequencies
+            # ✅ Validate only standard frequencies
             if not is_sofia_subscription:
                 if freq_lower not in ["daily", "weekly", "manual"]:
                     update.message.reply_text("⚠️ Frequency must be one of: daily, weekly, or manual")
                     return
-                frequency = freq_lower  # normalize for storage
 
             # ✅ Clean AffiliateID
             affiliate_id = affiliate_id.lstrip("#")
@@ -120,6 +128,7 @@ def handle_message(update: Update, context: CallbackContext):
             if duplicate:
                 update.message.reply_text(f"⚠️ This chat is already subscribed for {frequency}.")
             else:
+                # ✅ Append new subscription
                 rows.append({
                     "ChatID": chat_id,
                     "Frequency": frequency,
@@ -136,9 +145,7 @@ def handle_message(update: Update, context: CallbackContext):
                 else:
                     update.message.reply_text(f"✅ Subscribed: ID #{affiliate_id} | {frequency}")
 
-                logger.info(
-                    f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'"
-                )
+                logger.info(f"📝 affiliates.csv updated → {chat_id}, {frequency}, {affiliate_id} from chat '{chat_name}'")
 
         except Exception as e:
             logger.error(f"❌ Error in subscribe: {e}")
@@ -147,7 +154,7 @@ def handle_message(update: Update, context: CallbackContext):
     # ----------------------------------------
     # /unsubscribe command
     # ----------------------------------------
-    elif text.startswith("/unsubscribe"):
+    elif text.lower().startswith("/unsubscribe"):
         try:
             chat_id = str(update.message.chat_id)
             chat_name = update.message.chat.title or update.message.chat.username or "Private Chat"
